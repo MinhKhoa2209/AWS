@@ -1,12 +1,99 @@
-# W5 Evidence Checklist
+# W5 Evidence Pack
 
-## Terraform
-- `aws sts get-caller-identity` screenshot/output: account `910012064913`, role `WSParticipantRole/Participant`
-- `terraform plan` summary with no destroy/replace: `No changes. Your infrastructure matches the configuration.`
-- `terraform output`: saved in `terraform/xops-post-apply-evidence-us-west-2.txt`
+## Cover
+- Group ID:
+- Members:
+- Repository:
+- Previous week evidence pack:
+
+## Terraform Evidence Pack
+
+### Terraform scope
+- Terraform stack: `terraform-w5-dmk`
+- AWS account: `910012064913`
+- Region: `us-west-2`
+- Deployment model: standalone W5 stack
+- Naming/tagging scope: `xops-w5-dmk`
+- State model: local Terraform state in `terraform-w5-dmk`
+- Secret files not committed: `terraform.tfvars`, `aws-workshop.ps1`, `.tfstate`, `.tfplan`
+- Constraint: stack does not import or update existing `XOPS-*` or `foodiedash-*` resources.
+
+### Terraform validation evidence
+Required screenshots:
+- PowerShell output of `aws sts get-caller-identity` showing account `910012064913` and role `WSParticipantRole/Participant`.
+- PowerShell output of `terraform init`.
+- PowerShell output of `terraform fmt -recursive`.
+- PowerShell output of `terraform validate`.
+- PowerShell output of `terraform plan` after apply showing no unexpected destroy/replace.
+- PowerShell output of `terraform output`.
+
+Commands:
+
+```powershell
+cd D:\AWS\Deploy\terraform-w5-dmk
+.\aws-workshop.ps1
+aws sts get-caller-identity
+terraform init
+terraform fmt -recursive
+terraform validate
+terraform plan
+terraform output
+```
+
+### Terraform outputs
+
+```text
+account_id = "910012064913"
+aws_region = "us-west-2"
+vpc_id = "vpc-09bb0ead5879f6c36"
+nat_eips_for_atlas_allowlist = ["52.42.233.39", "44.254.8.163"]
+frontend_bucket = "xops-w5-dmk-fe-910012064913"
+cloudfront_domain_name = "d3t1geq8n6hvhj.cloudfront.net"
+cloudfront_distribution_id = "E217X7CHTN1SCP"
+waf_web_acl_arn = "arn:aws:wafv2:us-east-1:910012064913:global/webacl/xops-w5-dmk-cloudfront-waf/86aace07-5c02-46b1-b632-c487454adc13"
+private_alb_dns_name = "internal-xops-w5-dmk-alb-835647493.us-west-2.elb.amazonaws.com"
+ecr_repository_url = "910012064913.dkr.ecr.us-west-2.amazonaws.com/xops-w5-dmk-be"
+ecs_cluster_name = "xops-w5-dmk-cluster"
+ecs_service_name = "xops-w5-dmk-backend-service"
+documentdb_endpoint = "xops-w5-dmk-docdb.cluster-cxssa6wm4z16.us-west-2.docdb.amazonaws.com"
+efs_id = "fs-01a57288ffa10175c"
+ops_runner_instance_id = "i-052ed317c1d6868f0"
+rag_api_url = "https://oi3hwyrwz6.execute-api.us-west-2.amazonaws.com/prod"
+rag_api_key_id = "4n3hcvb92h"
+backup_vault_name = "xops-w5-dmk-backup-vault"
+backup_plan_id = "576abd36-824e-4ab9-a7bd-36a13fa0e2cf"
+dms_task_arn = "arn:aws:dms:us-west-2:910012064913:task:67TQ2LYIHRCNNN2NBNKMAOKI5E"
+```
+
+### Terraform-managed resource groups
+- Network: VPC, public/firewall/private app/private data subnets, route tables, NAT gateways, VPC Flow Logs, Network Firewall.
+- Frontend: S3 private bucket, S3 OAC bucket policy, CloudFront distribution, CloudFront VPC Origin, WAF Web ACL.
+- Backend: ECR repository, private ALB, target group, ECS cluster, ECS task definition, ECS service, ECS CloudWatch log group.
+- Security/IAM: KMS key, security groups, ECS/Lambda/Backup/DMS/ops-runner roles and policies.
+- Data: DocumentDB cluster, DocumentDB instance, subnet group, parameter group, Secrets Manager secrets.
+- Storage/backup: EFS file system, EFS mount targets, EC2 ops-runner, AWS Backup vault, backup plan, backup selection.
+- API/RAG: Lambda RAG, Lambda alias, provisioned concurrency, API Gateway REST API, API key, usage plan.
+- Migration: DMS replication instance, endpoints, certificate, replication task when `enable_dms = true`.
+
+### Terraform screenshots to include
+- `terraform output` terminal screenshot showing the key IDs above.
+- VPC console screenshot for `xops-w5-dmk-vpc`.
+- CloudFront distribution screenshot for `E217X7CHTN1SCP`.
+- ECS service screenshot for `xops-w5-dmk-backend-service`.
+- DocumentDB cluster screenshot for `xops-w5-dmk-docdb`.
+- EFS screenshot for `fs-01a57288ffa10175c`.
+- AWS Backup vault screenshot for `xops-w5-dmk-backup-vault`.
+- API Gateway screenshot for RAG REST API and API key/usage plan.
+- DMS task screenshot for task ARN ending `67TQ2LYIHRCNNN2NBNKMAOKI5E`.
+
+### Terraform acceptance
+- All W5 resources are created under the `xops-w5-dmk` stack scope.
+- `terraform plan` does not show accidental destroy/replace for shared resources.
+- `terraform output` provides the resource identifiers used in MH1-MH5 evidence.
+- Secrets are kept out of git and referenced through local `terraform.tfvars` plus AWS Secrets Manager.
 
 ## MH1 - VPC Flow Logs
-- Flow Logs log group: `/aws/vpc/flowlogs/XOPS`
+- Flow Logs log group: `/aws/vpc/xops-w5-dmk/flow-logs`
 - Sample `ACCEPT` log:
 - Sample `REJECT` log:
 
