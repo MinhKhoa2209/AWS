@@ -1,0 +1,27 @@
+node_modules/
+dist/
+build/
+.env
+.env.*
+!.env.example
+__pycache__/
+*.py[cod]
+.DS_Store
+
+# Nested application repositories are managed by their own remotes.
+XOPS_BE/
+XOPS_FE/
+
+.terraform/
+*.tfstate
+*.tfstate.*
+terraform/terraform.tfvars
+terraform/*.tfplan
+terraform-w5-dmk/.terraform/
+terraform-w5-dmk/terraform.tfvars
+terraform-w5-dmk/*.tfplan
+terraform-w5-dmk/*.zip
+terraform-w5-dmk/aws-workshop.ps1
+terraform-w5-dmk/*.local.ps1
+crash.log
+crash.*.log

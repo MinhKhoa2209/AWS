@@ -1,0 +1,42 @@
+aws_region  = "us-west-2"
+project     = "xops"
+environment = "w5-dmk"
+owner       = "dmk"
+vpc_cidr    = "10.60.0.0/16"
+
+backend_container_port = 4004
+backend_desired_count  = 1
+
+app_secret_values = {
+  auth_jwt_secret         = "CHANGE_ME"
+  auth_jwt_refresh_secret = "CHANGE_ME"
+  google_app_user         = "CHANGE_ME"
+  google_app_password     = "CHANGE_ME"
+  google_client_id        = "CHANGE_ME"
+  cloudinary_cloud_name   = "CHANGE_ME"
+  cloudinary_api_key      = "CHANGE_ME"
+  cloudinary_api_secret   = "CHANGE_ME"
+  gemini_api_key          = "CHANGE_ME"
+  groq_api_key            = "CHANGE_ME"
+  payos_client_id         = "CHANGE_ME"
+  payos_api_key           = "CHANGE_ME"
+  payos_checksum_key      = "CHANGE_ME"
+  ai_microservice_url     = "http://localhost:8001"
+  app_origin              = "https://CHANGE_ME_CLOUDFRONT_DOMAIN"
+}
+
+documentdb_master_username = "xopsadmin"
+documentdb_instance_class  = "db.t3.medium"
+documentdb_instance_count  = 1
+
+# Keep DMS disabled until MongoDB Atlas has allowlisted the NAT EIPs from terraform output.
+enable_dms = false
+mongodb_atlas = {
+  server_name = "CHANGE_ME.mongodb.net"
+  port        = 27017
+  database    = "CHANGE_ME"
+  username    = "CHANGE_ME"
+  password    = "CHANGE_ME"
+  auth_source = "admin"
+}
+dms_migration_type = "full-load"

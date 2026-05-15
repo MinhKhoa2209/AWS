@@ -1,0 +1,6 @@
+{
+  "dependencies": {
+    "module-alias": "^2.3.4",
+    "tsconfig-paths": "^4.2.0"
+  }
+}
