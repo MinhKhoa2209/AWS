@@ -1,338 +1,241 @@
-# W5 Terraform-First AWS Workshop Plan cho XOPS
+# W5 Terraform Workflow cho `terraform-w5-dmk`
 
 ## Tóm tắt
-- Dùng `Terraform` làm cách triển khai chính cho tuần này thay vì tạo service thủ công trên AWS Console.
-- Terraform dùng temporary AWS CLI credentials lấy từ `AWS Workshop Studio`, mặc định region `us-west-2`.
-- Vì đây là `shared workshop account`, Terraform phải ưu tiên `reuse resource đã có` bằng `data sources`, `terraform.tfvars`, hoặc import có kiểm soát; chỉ tạo service mới khi thật sự thiếu.
-- State dùng `local Terraform state` trong workspace tuần này để tránh phụ thuộc quyền tạo S3 backend/DynamoDB lock trong account workshop.
-- Vẫn giữ mục tiêu W5: `single VPC multi-AZ`, Flow Logs, Network Firewall, EFS, EC2 ops-runner, AWS Backup, API Gateway hardening, Lambda provisioned concurrency, và evidence cho từng MH.
+- Tài liệu này mô tả workflow triển khai W5 bằng Terraform, không dùng sơ đồ kiến trúc.
+- Stack chính là `terraform-w5-dmk`, một standalone Terraform stack cho tuần W5.
+- Stack này không import hoặc update các resource cũ như `XOPS-*` hoặc `foodiedash-*`.
+- Resource mới phải được đặt tên/tag theo ngữ cảnh `xops-w5-dmk`.
+- Terraform state hiện dùng local state trong thư mục `terraform-w5-dmk`.
+- `terraform.tfvars` và `aws-workshop.ps1` không được commit vì chứa secrets và temporary workshop credentials.
 
-## Terraform Access Setup
-Terraform không đăng nhập AWS Console trực tiếp. Terraform gọi AWS API bằng temporary credentials do AWS Workshop Studio cấp.
+## Stack Terraform đang quản lý
 
-1. Trong Workshop Studio, mở `AWS account access` -> `Get AWS CLI credentials`.
-2. Chọn tab `Windows (PowerShell)`.
-3. Copy các biến môi trường vào terminal PowerShell:
+### Network
+- VPC riêng cho W5 với CIDR mặc định `10.60.0.0/16`.
+- Hai AZ mặc định: `us-west-2a`, `us-west-2b`.
+- Public subnets, firewall subnets, private app subnets, private data subnets.
+- Internet Gateway, NAT Gateway, Elastic IP cho NAT.
+- Route tables và route table associations cho từng subnet group.
+- VPC Flow Logs gửi về CloudWatch Logs.
+- AWS Network Firewall cho kiểm soát outbound path.
+
+### Frontend
+- S3 private bucket cho frontend build.
+- S3 Block Public Access.
+- CloudFront Origin Access Control cho S3 origin.
+- CloudFront VPC Origin trỏ về private ALB.
+- CloudFront distribution cho frontend và backend routes.
+- WAF Web ACL cho CloudFront.
+- Response headers policy cho security headers.
+
+### Backend
+- ECR repository cho backend image.
+- Private Application Load Balancer.
+- ECS cluster, ECS task definition, ECS service chạy backend container.
+- CloudWatch Log Group cho ECS logs.
+- Secrets Manager lưu application secrets và runtime config.
+- IAM roles/policies cho ECS task execution và application task.
+
+### Data và migration
+- Amazon DocumentDB subnet group, parameter group, cluster, cluster instances.
+- Secrets Manager lưu DocumentDB credentials.
+- DMS chỉ được tạo khi `enable_dms = true`.
+- DMS dùng MongoDB Atlas làm source và DocumentDB làm target.
+- NAT EIP từ Terraform output phải được allowlist trong MongoDB Atlas trước khi bật DMS.
+
+### W5 evidence services
+- KMS key dùng cho encryption.
+- EFS shared file system và mount targets.
+- EC2 `ops-runner` trong private subnet để mount/test EFS và hỗ trợ restore test.
+- AWS Backup vault, backup plan, backup selection.
+- Lambda RAG, API Gateway, API key, usage plan.
+- Lambda provisioned concurrency cho RAG Lambda.
+
+## Workflow triển khai
+
+### 1. Chuẩn bị credentials
+1. Mở AWS Workshop Studio.
+2. Vào `AWS account access` -> `Get AWS CLI credentials`.
+3. Chọn tab `Windows (PowerShell)`.
+4. Copy temporary credentials vào file local:
 
 ```powershell
-$Env:AWS_DEFAULT_REGION="us-west-2"
-$Env:AWS_ACCESS_KEY_ID="<workshop-access-key>"
-$Env:AWS_SECRET_ACCESS_KEY="<workshop-secret-key>"
-$Env:AWS_SESSION_TOKEN="<workshop-session-token>"
+cd D:\AWS\Deploy\terraform-w5-dmk
+Copy-Item terraform.tfvars.example terraform.tfvars
+Copy-Item aws-workshop.example.ps1 aws-workshop.ps1
 ```
 
-4. Kiểm tra session trước khi chạy Terraform:
+5. Dán credentials thật vào `aws-workshop.ps1`.
+6. Load credentials:
+
+```powershell
+.\aws-workshop.ps1
+```
+
+7. Xác nhận session:
 
 ```powershell
 aws sts get-caller-identity
 aws configure get region
 ```
 
-5. Nếu credentials hết hạn, quay lại Workshop Studio copy lại credentials mới rồi chạy lại `terraform plan`.
+Nếu credentials hết hạn, quay lại Workshop Studio lấy credentials mới rồi chạy lại `.\aws-workshop.ps1`.
 
-## Terraform Strategy for Shared Workshop Account
-Provider mặc định:
+### 2. Chuẩn bị cấu hình Terraform
+1. Làm việc trong thư mục Terraform:
 
-```hcl
-provider "aws" {
-  region = "us-west-2"
-}
+```powershell
+cd D:\AWS\Deploy\terraform-w5-dmk
 ```
 
-Các nguyên tắc triển khai:
-- Dùng `terraform.tfvars` để khai báo `project = "xops"`, `environment = "workshop"`, region, tag chuẩn, và các ID resource có sẵn nếu cần.
-- Dùng `data` sources để lookup resource đã tồn tại theo `tag`, `name`, hoặc explicit ID trước khi tạo mới.
-- Dùng biến kiểu `create_*` hoặc kiểm tra `*_id` input để điều khiển conditional creation.
-- Không hard-delete, replace, hoặc recreate resource chung nếu resource đó không chắc chắn thuộc project.
-- Trước mỗi lần apply, bắt buộc đọc kỹ `terraform plan`; plan hợp lệ không được có `destroy` hoặc `replace` trên resource dùng chung.
-- Chỉ dùng `terraform import` khi team muốn Terraform quản lý sâu resource đã có. Nếu chỉ cần tham chiếu, ưu tiên `data source`.
-
-Ví dụ `terraform.tfvars`:
+2. Kiểm tra `terraform.tfvars` đã có các giá trị nền:
 
 ```hcl
 aws_region  = "us-west-2"
 project     = "xops"
-environment = "workshop"
-
-# Điền khi workshop account đã có resource phù hợp.
-existing_vpc_id         = ""
-existing_ecs_cluster_id = ""
-existing_alb_arn        = ""
-existing_docdb_arn      = ""
-
-# Chỉ bật tạo mới khi discovery xác nhận chưa có.
-create_vpc              = false
-create_network_firewall = true
-create_efs              = true
-create_ops_runner       = true
-create_backup_plan      = true
+environment = "w5-dmk"
+owner       = "dmk"
+vpc_cidr    = "10.60.0.0/16"
 ```
 
-## Current State Diagram
-```mermaid
-flowchart LR
-    U[User Browser] --> CF[Amazon CloudFront]
-    CF -->|/*| S3[Amazon S3\nFrontend Static Files]
-    CF -->|/api/* and /socket.io/*| ALB[Application Load Balancer]
+3. Điền secrets thật vào `app_secret_values`.
+4. Điền `app_origin` sau khi có CloudFront domain; trước lần apply đầu có thể để placeholder.
+5. Giữ `enable_dms = false` ở lần apply đầu.
+6. Chỉ điền `mongodb_atlas` thật sau khi đã có NAT EIP để allowlist trong MongoDB Atlas.
 
-    subgraph AWS["AWS Workshop Account"]
-        subgraph VPC["Existing or Imported VPC"]
-            IGW[Internet Gateway]
-            NAT[NAT Gateway]
-            subgraph PUB["Public Subnets"]
-                ALB
-            end
-            subgraph APP["Private App Subnets"]
-                ECS[AWS ECS Service]
-                FG[AWS Fargate Tasks\nNode.js Express API]
-            end
-            subgraph DATA["Private Data Subnets"]
-                DOCDB[Amazon DocumentDB Cluster]
-            end
-        end
-
-        ECR[Amazon ECR]
-        SM[Secrets Manager]
-        CW[CloudWatch Logs]
-        APIGW[Amazon API Gateway]
-        LMB[AWS Lambda]
-        BR[Amazon Bedrock]
-    end
-
-    ALB --> ECS
-    ECS --> FG
-    ECR --> ECS
-    SM --> FG
-    FG --> CW
-    FG -->|HTTPS via NAT| APIGW
-    FG --> DOCDB
-    APIGW --> LMB
-    LMB --> BR
-
-    FG -->|HTTPS via NAT| CLOUD[Cloudinary]
-    FG -->|HTTPS via NAT| PAYOS[PayOS]
-    FG -->|HTTPS via NAT| GOOGLE[Google OAuth]
-    FG -->|HTTPS via NAT| LLM[Groq / Gemini]
-```
-
-## Target W5 Diagram
-```mermaid
-graph TD
-    U[User Browser] --> CF[Amazon CloudFront]
-    CF -->|Static /*| S3[Amazon S3<br/>Frontend Static Files]
-    CF -->|/api/* and /socket.io/*| ALB[Application Load Balancer]
-
-    subgraph AWS["AWS Workshop Account - Terraform Managed Where Needed"]
-        direction TD
-
-        subgraph REUSE["Reuse If Exists"]
-            direction LR
-            ECR[Amazon ECR]
-            SM[Secrets Manager]
-            ECS[AWS ECS Service]
-            ALB
-            S3
-            CF
-            APIGW[API Gateway]
-            LMB[AWS Lambda]
-            BR[Amazon Bedrock]
-            DOCDB[Amazon DocumentDB]
-        end
-
-        subgraph CREATE["Create If Missing for W5"]
-            direction LR
-            KMS[AWS KMS]
-            BK[AWS Backup]
-            VAULT[Backup Vault]
-            FLOW[VPC Flow Logs]
-            CW[CloudWatch Logs / Metrics]
-            NFW[AWS Network Firewall]
-            EFS[Amazon EFS]
-            EC2[EC2 Ops Runner]
-        end
-
-        subgraph VPC["Single VPC - Multi AZ"]
-            direction TD
-            IGW[Internet Gateway]
-
-            subgraph SUBNETS["Subnet Layout"]
-                direction LR
-
-                subgraph AZA["Availability Zone A"]
-                    direction TB
-                    PUBA[Public Subnet A]
-                    FWA[Firewall Subnet A]
-                    APPA[Private App Subnet A]
-                    DATAA[Private Data Subnet A]
-                end
-
-                subgraph AZB["Availability Zone B"]
-                    direction TB
-                    PUBB[Public Subnet B]
-                    FWB[Firewall Subnet B]
-                    APPB[Private App Subnet B]
-                    DATAB[Private Data Subnet B]
-                end
-            end
-
-            subgraph EGRESS["Egress Security Path"]
-                direction LR
-                NFW
-                NATA[NAT Gateway A]
-                NATB[NAT Gateway B]
-                NATOUT[Public AWS API Egress]
-            end
-        end
-    end
-
-    ECR --> ECS
-    SM --> ECS
-    ECS -->|Read / write| EFS
-    EC2 -->|Mount / restore test| EFS
-    ECS -->|App data| DOCDB
-
-    ECS -->|Outbound HTTPS| NFW
-    NFW --> NATA
-    NFW --> NATB
-    NATA --> NATOUT
-    NATB --> NATOUT
-    NATOUT --> APIGW
-    APIGW --> LMB --> BR
-
-    FLOW --> CW
-    NFW --> CW
-    BK --> EFS
-    BK --> EC2
-    BK --> DOCDB
-    BK --> VAULT
-    KMS --> EFS
-    KMS --> DOCDB
-    KMS --> VAULT
-```
-
-## AWS Services trong Terraform Plan
-
-### Reuse if exists
-- `Amazon VPC`: network boundary chính, ưu tiên lookup VPC hiện có bằng ID/tag.
-- `Public/Private Subnets`: reuse subnets multi-AZ nếu đã có layout phù hợp.
-- `Security Groups`: reuse SG của ALB, ECS, DocumentDB, Lambda nếu rule hiện tại đúng.
-- `Amazon S3`: host frontend build.
-- `Amazon CloudFront`: edge distribution cho FE và reverse proxy `/api/*`, `/socket.io/*`.
-- `Application Load Balancer`: entry point cho backend Express.
-- `Amazon ECS` và `AWS Fargate`: backend service/task runtime.
-- `Amazon ECR`: image registry cho backend container.
-- `AWS Secrets Manager`: inject secret/env vào task definition.
-- `Amazon DocumentDB`: database chính của ứng dụng.
-- `Amazon API Gateway`: surface API chính thức trước Lambda.
-- `AWS Lambda`: xử lý RAG serverless.
-- `Amazon Bedrock`: AI model/runtime cho Lambda.
-
-### Create if missing for W5
-- `VPC Flow Logs`: bắt buộc cho MH1, gửi log về CloudWatch.
-- `AWS Network Firewall`: bắt buộc cho MH2 vì private outbound đi qua NAT Gateway.
-- `Firewall Subnets A/B`: tạo nếu VPC hiện tại chưa có subnet dành cho firewall endpoint.
-- `NAT Gateway A/B`: reuse nếu đã có; tạo gateway còn thiếu nếu cần đúng multi-AZ.
-- `Amazon CloudWatch Logs/Metrics`: log group cho Flow Logs, Firewall logs, ECS, Lambda metrics nếu thiếu.
-- `AWS KMS`: key mã hóa cho EFS, DocumentDB, Backup Vault nếu chưa có key project phù hợp.
-- `Amazon EFS`: shared file storage cho app tier.
-- `Amazon EC2`: `ops-runner` private Linux để mount EFS và demo restore.
-- `Amazon EBS`: encrypted volume gắn cho `ops-runner`, cũng là resource backup.
-- `AWS Backup`: backup plan, backup vault, backup selections cho `EFS + EBS + DocumentDB`.
-- `API Gateway API Key + Usage Plan`: hardening cho MH4 nếu API Gateway đã có nhưng chưa bật key.
-- `Lambda Provisioned Concurrency`: tối ưu MH5 cho Lambda RAG.
-
-### Do not recreate
-- `Amazon Bedrock model access`: không tạo lại bằng Terraform; dùng cấu hình workshop/account đã cấp.
-- Workshop account-level IAM/config đã có sẵn.
-- Resource chung không có tag/name liên quan `xops` hoặc không chắc thuộc project.
-- Existing CloudFront/S3/ECS/DocumentDB đang chạy production demo, trừ khi Terraform plan chỉ update đúng phần đã chốt.
-
-## Terraform Modules / Structure
-Đề xuất cấu trúc repo nếu triển khai Terraform ngay trong tuần này:
-
-```text
-terraform/
-  providers.tf
-  variables.tf
-  terraform.tfvars.example
-  data.tf
-  network.tf
-  storage.tf
-  compute.tf
-  backup.tf
-  api.tf
-  outputs.tf
-```
-
-- `providers.tf`: AWS provider, region `us-west-2`, default tags.
-- `variables.tf`: `project`, `environment`, `aws_region`, reuse IDs, create flags.
-- `terraform.tfvars.example`: template để team điền resource ID từ workshop account.
-- `data.tf`: lookup VPC, subnets, SGs, ECR, S3, CloudFront, ECS, ALB, DocumentDB, Lambda, API Gateway.
-- `network.tf`: Flow Logs, Network Firewall, firewall subnets/routing nếu cần.
-- `storage.tf`: EFS, mount targets, KMS key/alias nếu thiếu.
-- `compute.tf`: ECS task definition update để mount EFS, EC2 ops-runner private subnet, encrypted EBS.
-- `backup.tf`: AWS Backup vault, plan, selections, IAM role.
-- `api.tf`: API Gateway API key/usage plan, Lambda provisioned concurrency.
-- `outputs.tf`: CloudFront URL, ALB DNS, API Gateway endpoint, EFS ID, Backup vault/plan IDs, Flow Logs log group, Firewall ARN.
-
-Nếu tuần này chỉ cần tài liệu/evidence, chưa bắt buộc tạo toàn bộ file Terraform. Tuy nhiên mọi thay đổi AWS thật phải đi theo workflow Terraform dưới đây.
-
-## Interface và thay đổi triển khai cần chốt
-- Backend thêm env/secrets: `RAG_API_URL`, `RAG_API_KEY`, `AWS_REGION`, `EFS_SHARED_PATH`.
-- ECS task definition thêm `EFS volume` mount vào backend container khi `create_efs = true` hoặc `existing_efs_id` được cung cấp.
-- API Gateway thêm `API Key` và `Usage Plan`; backend gửi `x-api-key` khi gọi RAG endpoint.
-- Lambda RAG bật `Provisioned Concurrency`; không đổi contract request/response với backend.
-- DocumentDB giữ vai trò DB chính; backup/restore DB tuần này bám trực tiếp trên DocumentDB cluster đang dùng thật.
-
-## Terraform Deployment Workflow
-1. Export workshop AWS credentials trong PowerShell.
-2. Chạy `aws sts get-caller-identity` để xác nhận account/session.
-3. Chạy discovery bằng AWS CLI và Terraform `data` sources để xác định resource nào đã có.
-4. Điền `terraform.tfvars` với `us-west-2`, project tags, create flags, và ID resource có sẵn nếu cần.
-5. Chạy `terraform init`.
-6. Chạy `terraform plan`.
-7. Kiểm tra kỹ plan:
-   - Không có `destroy`.
-   - Không có `replace` trên resource dùng chung.
-   - Không tạo trùng VPC, ECS, ALB, S3, CloudFront, DocumentDB, Lambda, API Gateway nếu đã tồn tại.
-8. Chỉ chạy `terraform apply` khi plan chỉ tạo mới phần W5 còn thiếu hoặc update đúng resource project đã chốt.
-9. Sau apply, lấy `terraform output` cho CloudFront, ALB, API Gateway, EFS, Backup, Flow Logs, Firewall.
-10. Cập nhật `docs/W5_evidence.md` bằng outputs, AWS console screenshots, CloudWatch logs/metrics, và kết quả test.
-
-## Suggested Discovery Commands
-Chạy các lệnh này trước khi quyết định `create_* = true`:
+### 3. Apply base stack
+1. Khởi tạo và kiểm tra Terraform:
 
 ```powershell
-aws ec2 describe-vpcs --region us-west-2
-aws ec2 describe-subnets --region us-west-2
-aws ecs list-clusters --region us-west-2
-aws ecr describe-repositories --region us-west-2
-aws elbv2 describe-load-balancers --region us-west-2
-aws docdb describe-db-clusters --region us-west-2
-aws lambda list-functions --region us-west-2
-aws apigateway get-rest-apis --region us-west-2
-aws s3api list-buckets
-aws cloudfront list-distributions
+terraform init
+terraform fmt -recursive
+terraform validate
+terraform plan
 ```
 
-Kết quả discovery phải được chuyển thành `data` source hoặc explicit ID trong `terraform.tfvars`, không tạo trùng service.
+2. Đọc kỹ plan trước khi apply:
+- Plan hợp lệ chỉ tạo hoặc cập nhật resource thuộc stack `xops-w5-dmk`.
+- Không được import, replace, destroy, hoặc update các resource cũ `XOPS-*` hoặc `foodiedash-*`.
+- Lần apply đầu phải giữ `enable_dms = false`.
+- Nếu CloudFront quota hoặc workshop restriction chặn deployment, cân nhắc đặt `create_cloudfront_distribution = false` và ghi rõ trade-off trong evidence.
 
-## Test và acceptance
-- `terraform plan` không có hành động `destroy` hoặc `replace` resource dùng chung.
-- Resource có sẵn được Terraform đọc qua `data` source hoặc ID trong `terraform.tfvars`, không tạo trùng.
-- Nếu service chưa có, Terraform tạo đúng phần thiếu cho W5: Flow Logs, Network Firewall, EFS, EC2 ops-runner, Backup plan/vault, API Gateway usage plan/API key, Lambda provisioned concurrency.
-- `MH1`: Flow Logs có sample `ACCEPT/REJECT`; sơ đồ giải thích rõ vì sao vẫn dùng `single VPC`.
-- `MH2`: có 1 request bị chặn trong Firewall Alert Logs và 1 request hợp lệ đi qua NAT.
-- `MH3`: ECS hoặc EC2 ghi/đọc file thật từ EFS; backup jobs `Completed` cho `EFS + EBS + DocumentDB`; restore đọc lại được data đã biết.
-- `MH4`: request có `x-api-key` trả `200`; thiếu key trả `403`.
-- `MH5`: metric Lambda thể hiện cold start giảm sau khi bật provisioned concurrency.
-- `Carry-forward`: FE load qua CloudFront, backend đi qua ALB, chat end-to-end vẫn chạy.
+3. Apply base stack:
 
-## Assumptions
-- Region mặc định là `us-west-2` vì Workshop Studio đang cấp console/credentials cho region này.
-- Terraform state dùng local state trong workspace tuần này.
-- Reuse strategy mặc định là `data source first`; chỉ import resource nếu cần Terraform quản lý sâu resource đó.
-- Account workshop có thể đã configure sẵn một phần service, nên mọi bước tạo mới phải đi sau discovery và kiểm tra `terraform plan`.
-- FE chính thức được trình bày là `S3 + CloudFront`.
-- DB chính hiện đã migrate sang `Amazon DocumentDB`, nên DocumentDB phải xuất hiện trong cả `Current State` và `Target W5` diagram.
-- Nếu console hiện tại chỉ có `1 NAT Gateway`, W5 target nên nâng lên `2 NAT Gateway` để đúng multi-AZ; nếu team không kịp, ghi rõ trade-off trong evidence.
+```powershell
+terraform apply
+```
+
+4. Lưu các output nền:
+
+```powershell
+terraform output
+terraform output ecr_repository_url
+terraform output frontend_bucket
+terraform output cloudfront_domain_name
+terraform output nat_eips_for_atlas_allowlist
+```
+
+### 4. Deploy application
+1. Lấy ECR repository URL:
+
+```powershell
+terraform output ecr_repository_url
+```
+
+2. Build backend image từ source backend và push vào ECR repository trên.
+3. ECS service và task definition đã được Terraform tạo; sau khi image có trên ECR, force new deployment nếu cần để service pull image mới.
+4. Build frontend từ source frontend.
+5. Upload frontend build vào S3 bucket:
+
+```powershell
+terraform output frontend_bucket
+```
+
+6. Nếu CloudFront được bật, test frontend bằng:
+
+```powershell
+terraform output cloudfront_domain_name
+```
+
+7. Test backend route qua CloudFront hoặc private ALB tùy cấu hình đang dùng trong evidence.
+
+### 5. Chuẩn bị MongoDB Atlas và DMS
+1. Lấy NAT EIP để allowlist trong MongoDB Atlas:
+
+```powershell
+terraform output nat_eips_for_atlas_allowlist
+```
+
+2. Vào MongoDB Atlas, allowlist toàn bộ NAT EIP Terraform trả về.
+3. Cập nhật `terraform.tfvars` với thông tin thật:
+
+```hcl
+enable_dms = true
+mongodb_atlas = {
+  server_name = "..."
+  port        = 27017
+  database    = "..."
+  username    = "..."
+  password    = "..."
+  auth_source = "admin"
+}
+dms_migration_type = "full-load"
+```
+
+4. Chạy plan riêng cho thay đổi DMS:
+
+```powershell
+terraform plan
+```
+
+5. Chỉ apply nếu plan chỉ thêm DMS resources và related secrets/IAM cho `xops-w5-dmk`:
+
+```powershell
+terraform apply
+```
+
+6. Lưu DMS task ARN:
+
+```powershell
+terraform output dms_task_arn
+```
+
+### 6. Thu evidence W5
+Lưu output chính:
+
+```powershell
+terraform output vpc_id
+terraform output cloudfront_domain_name
+terraform output cloudfront_distribution_id
+terraform output waf_web_acl_arn
+terraform output private_alb_dns_name
+terraform output ecr_repository_url
+terraform output ecs_cluster_name
+terraform output ecs_service_name
+terraform output documentdb_endpoint
+terraform output efs_id
+terraform output ops_runner_instance_id
+terraform output rag_api_url
+terraform output rag_api_key_id
+terraform output backup_vault_name
+terraform output backup_plan_id
+terraform output dms_task_arn
+```
+
+Evidence cần có:
+- VPC Flow Logs có sample traffic `ACCEPT` hoặc `REJECT`.
+- Network Firewall có log hoặc rule test chứng minh outbound filtering.
+- EFS mount được từ ECS hoặc EC2 `ops-runner`, có test read/write file thật.
+- AWS Backup job hoàn tất cho resource trong backup selection.
+- API Gateway request có `x-api-key` trả thành công, thiếu key bị chặn.
+- Lambda RAG có provisioned concurrency và metric liên quan.
+- Frontend load được qua CloudFront nếu `create_cloudfront_distribution = true`.
+- Backend service healthy trong ECS và nhận request qua đường publish đã chọn.
+- DocumentDB endpoint được backend dùng làm database target.
+- DMS task chạy được sau khi Atlas allowlist NAT EIP, nếu `enable_dms = true`.
+
+Cập nhật evidence vào:
+
+```text
+docs/W5_evidence.md
+```
