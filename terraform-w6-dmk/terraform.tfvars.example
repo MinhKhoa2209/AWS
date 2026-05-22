@@ -1,0 +1,23 @@
+aws_region  = "us-west-2"
+project     = "xops"
+environment = "w6-dmk"
+owner       = "dmk"
+vpc_cidr    = "10.60.0.0/16"
+
+backend_container_port = 4004
+backend_desired_count  = 1
+
+app_origin           = "https://CHANGE_ME_CLOUDFRONT_DOMAIN"
+google_client_id     = "CHANGE_ME"
+ai_microservice_url  = "http://localhost:8001"
+
+documentdb_master_username = "xopsadmin"
+documentdb_database_name   = "xops"
+documentdb_instance_class  = "db.t3.medium"
+documentdb_instance_count  = 2
+bedrock_model_id           = "amazon.titan-text-express-v1"
+
+# Keep DMS disabled until MongoDB Atlas has allowlisted the NAT EIPs from terraform output.
+enable_dms = false
+mongodb_atlas_auth_source = "admin"
+dms_migration_type = "full-load"

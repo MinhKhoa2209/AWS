@@ -1,11 +1,11 @@
-# W5 Terraform Workflow cho `terraform-w5-dmk`
+# W5 Terraform Workflow cho `terraform-w6-dmk`
 
 ## Tóm tắt
 - Tài liệu này mô tả workflow triển khai W5 bằng Terraform, không dùng sơ đồ kiến trúc.
-- Stack chính là `terraform-w5-dmk`, một standalone Terraform stack cho tuần W5.
+- Stack chính là `terraform-w6-dmk`, một standalone Terraform stack cho tuần W5.
 - Stack này không import hoặc update các resource cũ như `XOPS-*` hoặc `foodiedash-*`.
-- Resource mới phải được đặt tên/tag theo ngữ cảnh `xops-w5-dmk`.
-- Terraform state hiện dùng local state trong thư mục `terraform-w5-dmk`.
+- Resource mới phải được đặt tên/tag theo ngữ cảnh `xops-w6-dmk`.
+- Terraform state hiện dùng local state trong thư mục `terraform-w6-dmk`.
 - `terraform.tfvars` và `aws-workshop.ps1` không được commit vì chứa secrets và temporary workshop credentials.
 
 ## Stack Terraform đang quản lý
@@ -23,7 +23,8 @@
 - S3 private bucket cho frontend build.
 - S3 Block Public Access.
 - CloudFront Origin Access Control cho S3 origin.
-- CloudFront VPC Origin trỏ về private ALB.
+- CloudFront trỏ backend paths về HTTP API.
+- HTTP API dùng Lambda Authorizer và VPC Link tới private ALB.
 - CloudFront distribution cho frontend và backend routes.
 - WAF Web ACL cho CloudFront.
 - Response headers policy cho security headers.
@@ -48,7 +49,10 @@
 - EFS shared file system và mount targets.
 - EC2 `ops-runner` trong private subnet để mount/test EFS và hỗ trợ restore test.
 - AWS Backup vault, backup plan, backup selection.
-- Lambda RAG, API Gateway, API key, usage plan.
+- Lambda RAG gọi Bedrock qua HTTP API.
+- Sync Lambda nhận object-created event từ logs bucket.
+- Media bucket với lifecycle chuyển Standard-IA và logs bucket Standard.
+- VPC endpoints cho ECR, CloudWatch Logs, Secrets Manager, KMS, SSM và S3 gateway.
 - Lambda provisioned concurrency cho RAG Lambda.
 
 ## Workflow triển khai
@@ -60,7 +64,7 @@
 4. Copy temporary credentials vào file local:
 
 ```powershell
-cd D:\AWS\Deploy\terraform-w5-dmk
+cd D:\AWS\Deploy\terraform-w6-dmk
 Copy-Item terraform.tfvars.example terraform.tfvars
 Copy-Item aws-workshop.example.ps1 aws-workshop.ps1
 ```
@@ -85,7 +89,7 @@ Nếu credentials hết hạn, quay lại Workshop Studio lấy credentials mớ
 1. Làm việc trong thư mục Terraform:
 
 ```powershell
-cd D:\AWS\Deploy\terraform-w5-dmk
+cd D:\AWS\Deploy\terraform-w6-dmk
 ```
 
 2. Kiểm tra `terraform.tfvars` đã có các giá trị nền:
@@ -93,7 +97,7 @@ cd D:\AWS\Deploy\terraform-w5-dmk
 ```hcl
 aws_region  = "us-west-2"
 project     = "xops"
-environment = "w5-dmk"
+environment = "w6-dmk"
 owner       = "dmk"
 vpc_cidr    = "10.60.0.0/16"
 ```
@@ -114,7 +118,7 @@ terraform plan
 ```
 
 2. Đọc kỹ plan trước khi apply:
-- Plan hợp lệ chỉ tạo hoặc cập nhật resource thuộc stack `xops-w5-dmk`.
+- Plan hợp lệ chỉ tạo hoặc cập nhật resource thuộc stack `xops-w6-dmk`.
 - Không được import, replace, destroy, hoặc update các resource cũ `XOPS-*` hoặc `foodiedash-*`.
 - Lần apply đầu phải giữ `enable_dms = false`.
 - Nếu CloudFront quota hoặc workshop restriction chặn deployment, cân nhắc đặt `create_cloudfront_distribution = false` và ghi rõ trade-off trong evidence.
@@ -188,7 +192,7 @@ dms_migration_type = "full-load"
 terraform plan
 ```
 
-5. Chỉ apply nếu plan chỉ thêm DMS resources và related secrets/IAM cho `xops-w5-dmk`:
+5. Chỉ apply nếu plan chỉ thêm DMS resources và related secrets/IAM cho `xops-w6-dmk`:
 
 ```powershell
 terraform apply
@@ -213,10 +217,14 @@ terraform output ecr_repository_url
 terraform output ecs_cluster_name
 terraform output ecs_service_name
 terraform output documentdb_endpoint
+terraform output documentdb_reader_endpoint
 terraform output efs_id
 terraform output ops_runner_instance_id
 terraform output rag_api_url
-terraform output rag_api_key_id
+terraform output http_api_endpoint
+terraform output media_bucket
+terraform output logs_bucket
+terraform output sync_lambda_name
 terraform output backup_vault_name
 terraform output backup_plan_id
 terraform output dms_task_arn

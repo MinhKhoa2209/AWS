@@ -17,11 +17,11 @@ XOPS_FE/
 *.tfstate.*
 terraform/terraform.tfvars
 terraform/*.tfplan
-terraform-w5-dmk/.terraform/
-terraform-w5-dmk/terraform.tfvars
-terraform-w5-dmk/*.tfplan
-terraform-w5-dmk/*.zip
-terraform-w5-dmk/aws-workshop.ps1
-terraform-w5-dmk/*.local.ps1
+terraform-w6-dmk/.terraform/
+terraform-w6-dmk/terraform.tfvars
+terraform-w6-dmk/*.tfplan
+terraform-w6-dmk/*.zip
+terraform-w6-dmk/aws-workshop.ps1
+terraform-w6-dmk/*.local.ps1
 crash.log
 crash.*.log

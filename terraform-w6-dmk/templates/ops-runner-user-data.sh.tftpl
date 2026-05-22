@@ -1,0 +1,10 @@
+#!/bin/bash
+set -euo pipefail
+
+dnf install -y amazon-efs-utils
+mkdir -p /mnt/xops-efs
+
+echo "${efs_id}.efs.${aws_region}.amazonaws.com:/ /mnt/xops-efs efs _netdev,tls 0 0" >> /etc/fstab
+mount -a
+
+echo "xops-w6-dmk-efs-mounted $(date -Is)" > /mnt/xops-efs/ops-runner-healthcheck.txt
