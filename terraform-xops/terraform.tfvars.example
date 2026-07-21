@@ -1,0 +1,42 @@
+aws_region  = "us-east-1"
+project     = "xops"
+environment = "prod"
+owner       = "dmk"
+vpc_cidr    = "10.60.0.0/16"
+azs         = ["us-east-1a", "us-east-1b"]
+nat_gateway_count = 1
+
+backend_container_port = 4004
+backend_cpu            = 256
+backend_memory         = 512
+backend_desired_count  = 0
+enable_auto_shutdown   = false
+auto_shutdown_at_utc   = "2026-05-25T19:00:00"
+
+app_origin           = "https://CHANGE_ME_CLOUDFRONT_DOMAIN"
+google_client_id     = "CHANGE_ME"
+ai_microservice_url  = "http://localhost:8001"
+
+documentdb_master_username = "xopsadmin"
+documentdb_database_name   = "xops"
+enable_documentdb          = false
+documentdb_instance_class  = "db.t3.medium"
+documentdb_instance_count  = 1
+documentdb_backup_retention_period = 1
+bedrock_model_id           = "amazon.titan-text-express-v1"
+
+# Cost-first defaults. Enable these only when the extra capability is required.
+enable_dms                            = false
+enable_network_firewall               = false
+enable_interface_vpc_endpoints        = false
+enable_vpc_flow_logs                  = false
+enable_lambda_provisioned_concurrency = false
+create_cloudfront_distribution        = true
+enable_cloudfront_waf                 = false
+cloudfront_price_class                = "PriceClass_100"
+enable_ops_runner                     = false
+enable_backup                         = false
+
+# Enable only after MongoDB Atlas has allowlisted the NAT EIPs from terraform output.
+mongodb_atlas_auth_source = "admin"
+dms_migration_type = "full-load"

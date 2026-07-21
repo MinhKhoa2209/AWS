@@ -1,0 +1,1 @@
+{"statusCode": 200, "headers": {"content-type": "application/json"}, "body": "{\"ok\": true, \"stack\": \"xops-prod\", \"region\": \"us-east-1\", \"input\": {}}"}
